@@ -1,0 +1,19 @@
+server:
+  port: 8089
+
+spring:
+  application:
+    name: forwarder-service
+
+  webflux:
+    base-path: /forwarder-service
+
+  r2dbc:
+    url: r2dbc:mysql://localhost:3306/forwarder_db
+    username: root
+    password: Putin@140223
+
+  data:
+    redis:
+      host: localhost
+      port: 6379
