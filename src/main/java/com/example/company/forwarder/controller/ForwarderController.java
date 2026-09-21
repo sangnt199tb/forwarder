@@ -3,7 +3,6 @@ package com.example.company.forwarder.controller;
 import com.example.company.forwarder.dto.RequestEnvelope;
 import com.example.company.forwarder.dto.ResponseEnvelope;
 import com.example.company.forwarder.exception.ErrorCode;
-import com.example.company.forwarder.exception.ForwarderException;
 import com.example.company.forwarder.model.ForwarderLog;
 import com.example.company.forwarder.model.GatewayRouteConfig;
 import com.example.company.forwarder.repository.ForwarderLogRepository;
