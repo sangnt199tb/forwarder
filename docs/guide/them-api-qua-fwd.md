@@ -9,6 +9,35 @@ Dùng khi cần cho FCC, AI hay đối tác khác gọi thêm một API của eB
 
 Có 4 nơi phải làm: **spec → service → gateway → DB của Forwarder**. Code của Forwarder **không cần sửa**.
 
+## Khi nào phải sửa code Forwarder?
+
+Forwarder là phần **dùng chung, không chứa nghiệp vụ**. Với nó, mỗi API chỉ là 2 dòng dữ liệu:
+`gateway_route_config` (apiId → URL trên gateway + method) và `partner_api_permission` (đối tác nào được gọi).
+Thêm dòng là dùng được ngay, không cần khởi động lại. Code chỉ phải viết ở phía eBank (spec, controller, route gateway).
+
+**Chỉ cấu hình DB là đủ** khi API:
+- là GET/DELETE với tham số trong path hoặc query (`.../customers/{cif}`, `...?from={from}`), giá trị lấy từ trường
+  cùng tên trong `body` của đối tác;
+- là POST/PUT/PATCH nhận một JSON: Forwarder gửi nguyên object `body`;
+- trả JSON (kể cả lỗi nghiệp vụ, Forwarder trả nguyên văn cho đối tác);
+- chạy xong trong 130 giây.
+
+**Phải sửa code Forwarder** khi:
+
+| Trường hợp | Vì sao | Hướng làm |
+|---|---|---|
+| Upload/download file (multipart, PDF, ảnh) | Forwarder chỉ gửi, nhận JSON; response không phải JSON bị coi là `SERVER_ERROR` | Thêm kiểu nội dung vào `gateway_route_config`, xử lý riêng trong `EbankGatewayClient` |
+| Đổi cấu trúc dữ liệu: đổi tên trường, gộp nhiều API, thêm header riêng | Forwarder chỉ thay biến vào URL và chuyển nguyên body | Làm ở service eBank (thêm API fwd đúng dạng đối tác cần) thay vì nhét nghiệp vụ vào Forwarder |
+| API chạy quá 130 giây | Timeout đang chung cho mọi API (`forwarder.http.response-timeout`) | Thêm cột timeout vào `gateway_route_config` |
+| Hạn mức riêng theo đối tác và API (ví dụ 1000 lần/ngày) | Hiện chỉ có rate limit chung theo đối tác ở gateway | Thêm bảng hạn mức, đếm bằng Redis |
+| eBank gọi ngược ra đối tác (callback, thông báo) | Chiều ngược lại, Forwarder chưa có | Module gọi ra riêng, ký request bằng secret của đối tác |
+| Đổi cách xác thực đối tác (mTLS, OAuth2) | Xác thực nằm trong code (`PartnerSignature`, `ForwardServiceImpl`) | Thêm cách xác thực mới, chọn theo cấu hình của đối tác |
+
+**Câu trả lời ngắn khi bảo vệ:** thêm một API cho đối tác không phải sửa hay triển khai lại Forwarder, chỉ thêm cấu hình
+(route + quyền). Forwarder chỉ lo phần chung: xác thực đối tác, chống gửi lại, phân quyền, ghi log, chuyển tiếp. Nghiệp vụ
+nằm ở service eBank. Cách tách này giống API Gateway hay ESB trong ngân hàng: thêm đối tác hay API là việc vận hành, không
+phải việc phát triển.
+
 ---
 
 ## Bước 1. Spec (`spec/<module>-spec`)
