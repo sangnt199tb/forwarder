@@ -4,16 +4,42 @@ server:
 spring:
   application:
     name: forwarder-service
+  # Secret (khoá bí mật ký token gửi API Gateway) để ở file riêng NGOÀI repo, không commit lên git.
+  # Mẫu: docs/config/forwarder-secrets.example.yaml. Thiếu file thì Forwarder không khởi động.
+  config:
+    import: optional:file:${user.home}/.ebank/forwarder-secrets.yaml
+  # Message lỗi song ngữ: i18n/errors_vi.properties, i18n/errors_en.properties
+  messages:
+    basename: i18n/errors
+    encoding: UTF-8
+    fallback-to-system-locale: false
 
   webflux:
     base-path: /forwarder-service
 
   r2dbc:
-    url: r2dbc:mysql://localhost:3306/forwarder_db
-    username: root
-    password: Putin@140223
+    url: r2dbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/forwarder_db
+    # User riêng của Forwarder, chỉ có quyền SELECT/INSERT/UPDATE/DELETE trên forwarder_db (docs/db/00-user.sql).
+    # Mật khẩu mặc định chỉ dùng cho máy local, môi trường khác truyền DB_PASSWORD
+    username: ${DB_USERNAME:forwarder}
+    password: ${DB_PASSWORD:Forwarder@Local2026}
 
-  data:
-    redis:
-      host: localhost
-      port: 6379
+forwarder:
+  partner-auth:
+    # X-Timestamp của đối tác được lệch tối đa bao nhiêu so với đồng hồ Forwarder. Quá thì REQUEST_EXPIRED.
+    # Chống gửi lại trong khoảng này bằng khoá duy nhất (partner_id, transaction_key) của forwarder_log
+    max-clock-skew: 300s
+  gateway-token:
+    # private-key nằm trong file secret ở trên. Khớp gateway.security / gateway.forwarder của API Gateway
+    issuer: ebank-forwarder
+    audience: ebank-gateway
+    # Token phát mới cho từng request. Gateway từ chối token sống quá 120 giây
+    ttl: 60s
+  http:
+    connect-timeout: 5s
+    # Dài hơn timeout dài nhất của gateway (onboard 125 giây): gateway kịp trả lỗi của nó trước khi Forwarder cắt
+    response-timeout: 130s
+
+logging:
+  level:
+    com.example.company.forwarder: INFO
