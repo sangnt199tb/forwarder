@@ -129,23 +129,25 @@ VALUES ('FCC', '<API_ID>', NOW());
    - `docs/api/<module>-api.md` của eBank: thêm mục API fwd (xem mục 2 của `customer-api.md`).
 2. Postman: dùng lại request `FWD`, đổi `apiId` và `body`. Script Pre-request tự ký lại.
 3. Kiểm tra kết quả:
-   - `SELECT * FROM forwarder_db.forwarder_log ORDER BY id DESC LIMIT 5;` → `SUCCESS | 200`;
+   - `SELECT * FROM forwarder_db.forwarder_log ORDER BY id DESC LIMIT 5;` → `SUCCESS | 200` (cột `http_status` là mã HTTP thật của eBank);
    - log theo `requestId`: Forwarder `D:\code\java\log-ebank\log-forwarder\current.log`, gateway và service trong
      `D:\app\log-ebank-system\` (hoặc OpenSearch Dashboards).
 
 ## Bảng tra lỗi khi cấu hình
 
+Đối tác nhận HTTP 400 khi Forwarder từ chối request (HYD-40-001…006), HTTP 200 khi eBank đã xử lý hoặc lỗi hệ thống; cột đầu là HTTP và `responseBody.code` / `errorCode`. Mã HTTP chi tiết nằm ở `forwarder_log.http_status` và log của Forwarder.
+
 | Đối tác nhận | Log / dấu hiệu | Nguyên nhân thường gặp |
 |---|---|---|
-| 401 `UNAUTHORIZED`, log `partner <invalid>` | Header thiếu hoặc chưa thay biến | Postman chưa chọn Environment, sai tên biến |
-| 401 `UNAUTHORIZED`, log `partner FCC: unknown or inactive partner, or wrong signature` | | Đối tác `INACTIVE` / chưa có trong DB; secret trong DB khác secret đối tác dùng |
-| 401 `REQUEST_EXPIRED` | | Đồng hồ máy đối tác lệch quá 5 phút |
-| 403 `API_NOT_ALLOWED` | | Thiếu dòng `partner_api_permission` |
-| 400 `API_NOT_FOUND` | | Thiếu `gateway_route_config` hoặc `is_active = 0` |
+| 400 `UNAUTHORIZED` (HYD-40-002), log `partner <invalid>` | Header thiếu hoặc chưa thay biến | Postman chưa chọn Environment, sai tên biến |
+| 400 `UNAUTHORIZED` (HYD-40-002), log `partner FCC: unknown or inactive partner, or wrong signature` | | Đối tác `INACTIVE` / chưa có trong DB; secret trong DB khác secret đối tác dùng |
+| 400 `REQUEST_EXPIRED` (HYD-40-003) | | Đồng hồ máy đối tác lệch quá 5 phút |
+| 400 `API_NOT_ALLOWED` (HYD-40-006) | | Thiếu dòng `partner_api_permission` |
+| 400 `API_NOT_FOUND` (HYD-40-005) | | Thiếu `gateway_route_config` hoặc `is_active = 0` |
 | 400 `VALIDATION_ERROR` (HYD-40-001) | `cannot build URL ... Map has no value for 'x'` | `body` thiếu trường trùng tên với biến `{x}` trong `target_url` |
-| 502 `HYD-40-010` | `API Gateway returned 404` | Gateway chưa có route `/<module>-fwd/**`, hoặc chưa restart gateway, hoặc `target_url` sai path |
-| 502 `HYD-40-010` | `API Gateway returned 401` | Khoá của Forwarder không khớp `gateway.forwarder.public-key`; xem log gateway `Rejected forwarder token ... <lý do>` |
-| 502 `HYD-40-010` | `API Gateway returned 403` | Service chặn vì thiếu/sai `X-Gateway-Token` (secret dùng chung không khớp, cần restart) |
-| 503 `HYD-40-008` | `cannot reach API Gateway` | Gateway chưa chạy, sai cổng trong `target_url` |
-| 503 từ gateway (`HYD-00-005`) | Circuit breaker mở | Service chưa đăng ký Eureka / chưa chạy |
-| 504 | | API chậm hơn timelimiter của route (mặc định 3 giây) |
+| 200 `SERVER_ERROR` (HYD-40-010) | `API Gateway returned 404` | Gateway chưa có route `/<module>-fwd/**`, hoặc chưa restart gateway, hoặc `target_url` sai path |
+| 200 `SERVER_ERROR` (HYD-40-010) | `API Gateway returned 401` | Khoá của Forwarder không khớp `gateway.forwarder.public-key`; xem log gateway `Rejected forwarder token ... <lý do>` |
+| 200 `SERVER_ERROR` (HYD-40-010) | `API Gateway returned 403` | Service chặn vì thiếu/sai `X-Gateway-Token` (secret dùng chung không khớp, cần restart) |
+| 200 `SERVER_ERROR` (HYD-40-008) | `cannot reach API Gateway` | Gateway chưa chạy, sai cổng trong `target_url` |
+| 200 `SERVER_ERROR` (`HYD-00-005`, gateway trả) | Circuit breaker mở | Service chưa đăng ký Eureka / chưa chạy |
+| 200 `SERVER_ERROR` (`HYD-00-006` từ gateway, hoặc HYD-40-009) | | API chậm hơn timelimiter của route (mặc định 3 giây) |

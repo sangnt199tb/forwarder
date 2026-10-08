@@ -9,6 +9,15 @@ import org.springframework.http.HttpStatus;
  * CUSTOMER_NOT_FOUND) được trả nguyên văn trong responseBody, không đổi sang mã ở đây.
  * <p>
  * Mọi lỗi 5xx có {@code code = SERVER_ERROR} như API Gateway, phân biệt nhau bằng errorCode.
+ * <p>
+ * Mã HTTP đối tác nhận ({@link #partnerStatus()}):
+ * <ul>
+ *   <li><b>400</b>: request bị Forwarder từ chối, chưa tới eBank (mã 4xx ở đây: xác thực, phân quyền, request sai,
+ *       apiId không có).</li>
+ *   <li><b>200</b>: lỗi hệ thống (mã 5xx ở đây). Kết quả do eBank trả (thành công hoặc lỗi nghiệp vụ) cũng là 200,
+ *       xử lý ở ForwardServiceImpl.</li>
+ * </ul>
+ * {@link #status()} là mã HTTP chi tiết của lỗi, chỉ ghi vào forwarder_log.http_status và log của Forwarder.
  * Không đổi số của mã đã có và không dùng lại số của mã đã xoá.
  */
 public enum ForwarderErrorCode {
@@ -48,8 +57,14 @@ public enum ForwarderErrorCode {
         this.code = code;
     }
 
+    /** Mã HTTP chi tiết của lỗi, chỉ dùng để ghi log (đối tác nhận {@link #partnerStatus()}). */
     public HttpStatus status() {
         return status;
+    }
+
+    /** Mã HTTP đối tác nhận: 400 khi request bị từ chối (lỗi 4xx), 200 khi lỗi hệ thống. */
+    public HttpStatus partnerStatus() {
+        return status.is4xxClientError() ? HttpStatus.BAD_REQUEST : HttpStatus.OK;
     }
 
     /** Giá trị trường "code" trong body lỗi. */

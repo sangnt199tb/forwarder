@@ -118,6 +118,25 @@ class ForwardServiceImplTest {
         return ts != null && PartnerSignature.matches(SECRET, "FCC", ts, response.getBody(), sig);
     }
 
+    /** eBank đã xử lý (lỗi nghiệp vụ) hoặc lỗi hệ thống: HTTP 200, kết quả trong body (status FAILED). */
+    private void assertFailedWith200(ResponseEntity<byte[]> response) {
+        assertThat(response.getStatusCode().value()).isEqualTo(200);
+        assertThat(json(response).get("status").asString()).isEqualTo("FAILED");
+    }
+
+    /** Forwarder từ chối request (xác thực, phân quyền, request sai): HTTP 400, status FAILED. */
+    private void assertRejectedWith400(ResponseEntity<byte[]> response) {
+        assertThat(response.getStatusCode().value()).isEqualTo(400);
+        assertThat(json(response).get("status").asString()).isEqualTo("FAILED");
+    }
+
+    /** Mã HTTP thật (của eBank hoặc ứng với lỗi Forwarder) vẫn được ghi vào forwarder_log. */
+    private ForwarderLog lastLog() {
+        ArgumentCaptor<ForwarderLog> saved = ArgumentCaptor.forClass(ForwarderLog.class);
+        verify(logs, atLeastOnce()).save(saved.capture());
+        return saved.getValue();
+    }
+
     private void ebankReturns(int status, String body) {
         when(gatewayClient.call(any(), eq("FCC"), any(), eq("req-1")))
                 .thenReturn(Mono.just(new DownstreamResponse(status, body.getBytes(StandardCharsets.UTF_8))));
@@ -147,19 +166,18 @@ class ForwardServiceImplTest {
     }
 
     @Test
-    void ebankBusinessErrorIsPassedThroughWithItsStatus() {
+    void ebankBusinessErrorIsPassedThroughWith200() {
         ebankReturns(400, "{\"code\":\"CUSTOMER_NOT_FOUND\",\"errorCode\":\"HYD-37-005\"}");
 
         ResponseEntity<byte[]> response = send();
 
-        assertThat(response.getStatusCode().value()).isEqualTo(400);
+        assertFailedWith200(response);
         assertThat(json(response).get("status").asString()).isEqualTo("FAILED");
         assertThat(json(response).get("responseBody").get("errorCode").asString()).isEqualTo("HYD-37-005");
         assertThat(signedByFcc(response)).isTrue();
 
-        ArgumentCaptor<ForwarderLog> saved = ArgumentCaptor.forClass(ForwarderLog.class);
-        verify(logs, atLeastOnce()).save(saved.capture());
-        assertThat(saved.getValue().getErrorCode()).isEqualTo("HYD-37-005");
+        assertThat(lastLog().getErrorCode()).isEqualTo("HYD-37-005");
+        assertThat(lastLog().getHttpStatus()).isEqualTo(400);
     }
 
     @Test
@@ -168,9 +186,10 @@ class ForwardServiceImplTest {
 
         ResponseEntity<byte[]> response = send();
 
-        assertThat(response.getStatusCode().value()).isEqualTo(502);
+        assertFailedWith200(response);
         assertThat(json(response).get("responseBody").get("errorCode").asString()).isEqualTo("HYD-40-010");
         assertThat(json(response).get("responseBody").get("code").asString()).isEqualTo("SERVER_ERROR");
+        assertThat(lastLog().getHttpStatus()).isEqualTo(502);
     }
 
     @Test
@@ -180,7 +199,7 @@ class ForwardServiceImplTest {
 
         ResponseEntity<byte[]> response = send();
 
-        assertThat(response.getStatusCode().value()).isEqualTo(503);
+        assertFailedWith200(response);
         assertThat(json(response).get("responseBody").get("errorCode").asString()).isEqualTo("HYD-40-008");
         assertThat(signedByFcc(response)).isTrue();
     }
@@ -189,7 +208,7 @@ class ForwardServiceImplTest {
     void wrongSignatureIsUnauthorizedAndNotSigned() {
         ResponseEntity<byte[]> response = send("FCC", TS, "wrong-secret", BODY);
 
-        assertThat(response.getStatusCode().value()).isEqualTo(401);
+        assertRejectedWith400(response);
         assertThat(json(response).get("responseBody").get("errorCode").asString()).isEqualTo("HYD-40-002");
         assertThat(json(response).get("responseBody").get("message").get("vi").asString()).isNotBlank();
         assertThat(response.getHeaders().getFirst("X-Signature")).isNull();
@@ -198,7 +217,7 @@ class ForwardServiceImplTest {
 
     @Test
     void unknownPartnerIsUnauthorized() {
-        assertThat(send("AI", TS, SECRET, BODY).getStatusCode().value()).isEqualTo(401);
+        assertRejectedWith400(send("AI", TS, SECRET, BODY));
     }
 
     @Test
@@ -206,7 +225,7 @@ class ForwardServiceImplTest {
         ResponseEntity<byte[]> response = service.forward(new InboundRequest(null, null, null, "req-1",
                 BODY.getBytes(StandardCharsets.UTF_8))).block();
 
-        assertThat(response.getStatusCode().value()).isEqualTo(401);
+        assertRejectedWith400(response);
     }
 
     @Test
@@ -215,7 +234,7 @@ class ForwardServiceImplTest {
 
         ResponseEntity<byte[]> response = send("FCC", old, SECRET, BODY);
 
-        assertThat(response.getStatusCode().value()).isEqualTo(401);
+        assertRejectedWith400(response);
         assertThat(json(response).get("responseBody").get("code").asString()).isEqualTo("REQUEST_EXPIRED");
         assertThat(signedByFcc(response)).isTrue();
     }
@@ -229,7 +248,7 @@ class ForwardServiceImplTest {
         ResponseEntity<byte[]> response = service.forward(
                 new InboundRequest("FCC", TS, signature, "req-1", tampered)).block();
 
-        assertThat(response.getStatusCode().value()).isEqualTo(401);
+        assertRejectedWith400(response);
     }
 
     @Test
@@ -237,7 +256,7 @@ class ForwardServiceImplTest {
         ResponseEntity<byte[]> response = send("FCC", TS, SECRET,
                 BODY.replace("CUSTOMER_DETAIL", "TRANSFER_CREATE"));
 
-        assertThat(response.getStatusCode().value()).isEqualTo(403);
+        assertRejectedWith400(response);
         assertThat(json(response).get("responseBody").get("code").asString()).isEqualTo("API_NOT_ALLOWED");
     }
 
@@ -247,7 +266,7 @@ class ForwardServiceImplTest {
 
         ResponseEntity<byte[]> response = send("FCC", TS, SECRET, BODY.replace("CUSTOMER_DETAIL", "OLD_API"));
 
-        assertThat(response.getStatusCode().value()).isEqualTo(400);
+        assertRejectedWith400(response);
         assertThat(json(response).get("responseBody").get("code").asString()).isEqualTo("API_NOT_FOUND");
     }
 
@@ -257,7 +276,7 @@ class ForwardServiceImplTest {
                 "{\"apiId\":\"CUSTOMER_DETAIL\",\"transactionKey\":\"bad key with spaces\"}")) {
             ResponseEntity<byte[]> response = send("FCC", TS, SECRET, body);
 
-            assertThat(response.getStatusCode().value()).as(body).isEqualTo(400);
+            assertRejectedWith400(response);
             assertThat(json(response).get("responseBody").get("code").asString()).isEqualTo("VALIDATION_ERROR");
         }
     }
@@ -268,7 +287,7 @@ class ForwardServiceImplTest {
 
         ResponseEntity<byte[]> response = send();
 
-        assertThat(response.getStatusCode().value()).isEqualTo(400);
+        assertRejectedWith400(response);
         assertThat(json(response).get("responseBody").get("code").asString()).isEqualTo("DUPLICATE_TRANSACTION");
         verify(gatewayClient, never()).call(any(), any(), any(), any());
     }

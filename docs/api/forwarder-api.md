@@ -107,7 +107,14 @@ pm.variables.set('xSignature', signature);
 
 ## 3. Response
 
-HTTP status phản ánh kết quả (200, 400, 401, 403, 5xx). Body luôn có dạng:
+**HTTP status chỉ có hai giá trị** (thay đổi ngày 08/10/2026):
+
+| HTTP | Khi nào |
+|---|---|
+| **400** | Forwarder **từ chối request**, request chưa tới eBank: sai xác thực, quá hạn, gửi trùng `transactionKey`, không có quyền, `apiId` không có, request sai định dạng (các mã `HYD-40-001…006`) |
+| **200** | Mọi trường hợp còn lại: eBank xử lý thành công, **eBank báo lỗi nghiệp vụ** (ví dụ không có dữ liệu), hoặc lỗi hệ thống (`HYD-40-007…010`) |
+
+HTTP 200 **không có nghĩa là thành công**: đối tác xem `status` và `responseBody.code`. Body luôn có dạng:
 
 ```json
 {
@@ -120,12 +127,19 @@ HTTP status phản ánh kết quả (200, 400, 401, 403, 5xx). Body luôn có d�
 
 | Trường | Mô tả |
 |---|---|
-| `status` | `SUCCESS` khi eBank xử lý thành công, còn lại `FAILED` |
+| `status` | `SUCCESS` khi eBank xử lý thành công, còn lại `FAILED`. Đây là trường duy nhất cho biết thành công hay không |
 | `responseBody` | Dữ liệu eBank trả về; hoặc body lỗi `{code, errorCode, message{vi,en}, requestId}` |
 
 **Chữ ký của response:** khi đối tác đã qua kiểm tra chữ ký, response có `X-Timestamp`, `X-Signature` tính **cùng
 công thức** trên body response (dùng `X-Partner-Id` của đối tác). Đối tác nên kiểm tra để chắc response đến từ eBank và
-không bị sửa. Response 401 `UNAUTHORIZED` không có chữ ký (Forwarder chưa xác định được đối tác).
+không bị sửa. Response lỗi `UNAUTHORIZED` không có chữ ký (Forwarder chưa xác định được đối tác).
+
+**Cách đối tác xử lý kết quả:**
+
+1. HTTP 400: request bị từ chối, sửa theo `responseBody.code` (mục 5) rồi gửi lại với `transactionKey` mới.
+2. HTTP 200 và `status = SUCCESS`: dữ liệu nằm trong `responseBody`.
+3. HTTP 200 và `status = FAILED`: đọc `responseBody.code` (và `errorCode` để báo eBank khi cần). Mã `HYD-40-xxx` là lỗi của Forwarder (mục 5), các mã khác (ví dụ `HYD-37-xxx`) là lỗi nghiệp vụ của eBank (mục 4 của từng API).
+4. Không nhận được body JSON đúng dạng trên (mất kết nối, timeout phía đối tác): coi như chưa biết kết quả, tra lại bằng `transactionKey` trước khi gửi giao dịch mới.
 
 ## 4. Danh sách API
 
@@ -136,7 +150,7 @@ không bị sửa. Response 401 `UNAUTHORIZED` không có chữ ký (Forwarder c
 | `body` | `{"cif": "CIF0000000001"}` — `cif`: chữ và số, tối đa 20 ký tự |
 | Gọi tới | `GET /customer-fwd/v1/customers/{cif}` của customer-service (qua API Gateway) |
 | `responseBody` khi thành công | `customer` (hồ sơ, giấy tờ, liên hệ, địa chỉ, KYC), `management` (chi nhánh, phân loại, rủi ro, kênh mở, mã nhân viên, mã giới thiệu), `branch`, `accounts[]` (số tài khoản, loại, tiền tệ, số dư, trạng thái, ngày mở). Ngày dạng `dd/MM/yyyy`; trường không có dữ liệu thì không trả. Chi tiết: `docs/api/customer-api.md` mục 2 của eBank |
-| Lỗi nghiệp vụ | HTTP 400, `responseBody.code = CUSTOMER_NOT_FOUND` (`HYD-37-005`): không có khách hàng với CIF này. `VALIDATION_ERROR` (`HYD-37-001`): CIF sai định dạng |
+| Lỗi nghiệp vụ | HTTP 200, `status = FAILED`, `responseBody.code = CUSTOMER_NOT_FOUND` (`HYD-37-005`): không có khách hàng với CIF này. `VALIDATION_ERROR` (`HYD-37-001`): CIF sai định dạng |
 
 Ví dụ `responseBody`:
 
@@ -163,18 +177,20 @@ Ví dụ `responseBody`:
 
 Lỗi nghiệp vụ của eBank (ví dụ `HYD-37-005`) được trả nguyên văn trong `responseBody`. Bảng dưới là lỗi do Forwarder trả.
 
+Mọi lỗi có `status = FAILED`, mã lỗi nằm trong `responseBody`.
+
 | HTTP | code | errorCode | Khi nào | Đối tác nên làm gì |
 |---|---|---|---|---|
 | 400 | `VALIDATION_ERROR` | HYD-40-001 | Body không phải JSON, thiếu hoặc sai `apiId`, `transactionKey`, thiếu dữ liệu của API | Sửa request |
-| 401 | `UNAUTHORIZED` | HYD-40-002 | Thiếu header, đối tác không tồn tại hoặc bị khoá, sai chữ ký (cố ý không nói rõ lý do) | Kiểm tra secret, cách ký |
-| 401 | `REQUEST_EXPIRED` | HYD-40-003 | `X-Timestamp` lệch quá 300 giây | Đồng bộ đồng hồ (NTP), gửi lại với timestamp và transactionKey mới |
+| 400 | `UNAUTHORIZED` | HYD-40-002 | Thiếu header, đối tác không tồn tại hoặc bị khoá, sai chữ ký (cố ý không nói rõ lý do) | Kiểm tra secret, cách ký |
+| 400 | `REQUEST_EXPIRED` | HYD-40-003 | `X-Timestamp` lệch quá 300 giây | Đồng bộ đồng hồ (NTP), gửi lại với timestamp và transactionKey mới |
 | 400 | `DUPLICATE_TRANSACTION` | HYD-40-004 | `transactionKey` đã dùng | Không gửi lại; tra kết quả lần trước theo transactionKey |
 | 400 | `API_NOT_FOUND` | HYD-40-005 | `apiId` không có hoặc đã tắt | Kiểm tra apiId |
-| 403 | `API_NOT_ALLOWED` | HYD-40-006 | Đối tác chưa được cấp quyền gọi API này | Liên hệ eBank |
-| 500 | `SERVER_ERROR` | HYD-40-007 | Lỗi không lường trước | Thử lại với transactionKey mới |
-| 503 | `SERVER_ERROR` | HYD-40-008 | Forwarder không kết nối được eBank | Thử lại sau |
-| 504 | `SERVER_ERROR` | HYD-40-009 | eBank không trả lời trong 130 giây | Thử lại sau |
-| 502 | `SERVER_ERROR` | HYD-40-010 | eBank từ chối Forwarder (cấu hình phía eBank sai) | Báo eBank kèm `requestId` |
+| 400 | `API_NOT_ALLOWED` | HYD-40-006 | Đối tác chưa được cấp quyền gọi API này | Liên hệ eBank |
+| 200 | `SERVER_ERROR` | HYD-40-007 | Lỗi không lường trước | Thử lại với transactionKey mới |
+| 200 | `SERVER_ERROR` | HYD-40-008 | Forwarder không kết nối được eBank | Thử lại sau |
+| 200 | `SERVER_ERROR` | HYD-40-009 | eBank không trả lời trong 130 giây | Thử lại sau |
+| 200 | `SERVER_ERROR` | HYD-40-010 | eBank từ chối Forwarder (cấu hình phía eBank sai) | Báo eBank kèm `requestId` |
 
 ## 6. Bảo mật — tóm tắt cho báo cáo
 

@@ -22,6 +22,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -92,7 +93,12 @@ public class ForwardServiceImpl implements ForwardService {
     }
 
     /** Kết quả trả cho đối tác, trước khi chuyển thành JSON và ký. */
-    private record Outcome(HttpStatusCode status, String result, Object responseBody, String errorCode) {
+    /**
+     * @param status        mã HTTP thật (của eBank, hoặc mã chi tiết của lỗi Forwarder), ghi vào forwarder_log
+     * @param partnerStatus mã HTTP trả cho đối tác: 200, hoặc 400 khi Forwarder từ chối request
+     */
+    private record Outcome(HttpStatusCode status, HttpStatusCode partnerStatus, String result, Object responseBody,
+                           String errorCode) {
     }
 
     /** Dữ liệu của một request đã qua kiểm tra chữ ký. */
@@ -226,10 +232,11 @@ public class ForwardServiceImpl implements ForwardService {
         }
         HttpStatusCode status = HttpStatusCode.valueOf(response.status());
         if (status.is2xxSuccessful()) {
-            return new Outcome(status, ResponseEnvelope.SUCCESS, body, null);
+            return new Outcome(status, HttpStatus.OK, ResponseEnvelope.SUCCESS, body, null);
         }
         JsonNode errorCode = body == null ? null : body.get("errorCode");
-        return new Outcome(status, ResponseEnvelope.FAILED, body,
+        // Lỗi nghiệp vụ do eBank trả: eBank đã xử lý xong request, đối tác nhận 200
+        return new Outcome(status, HttpStatus.OK, ResponseEnvelope.FAILED, body,
                 errorCode != null && errorCode.isValueNode() ? errorCode.asString() : null);
     }
 
@@ -251,7 +258,8 @@ public class ForwardServiceImpl implements ForwardService {
     }
 
     private Outcome errorOutcome(ForwarderErrorCode code, String requestId) {
-        return new Outcome(code.status(), ResponseEnvelope.FAILED, errorMessages.body(code, requestId),
+        return new Outcome(code.status(), code.partnerStatus(), ResponseEnvelope.FAILED,
+                errorMessages.body(code, requestId),
                 code.errorCode());
     }
 
@@ -281,7 +289,18 @@ public class ForwardServiceImpl implements ForwardService {
         return respond(null, in.requestId(), null, errorOutcome(ForwarderErrorCode.UNAUTHORIZED, in.requestId()));
     }
 
-    /** partner null: chưa xác thực được đối tác, response không ký. */
+    @Override
+    public ResponseEntity<byte[]> reject(ForwarderErrorCode code, String requestId) {
+        log.warn("[{}] Request rejected before processing: {}", requestId, code);
+        return respond(null, requestId, null, errorOutcome(code, requestId));
+    }
+
+    /**
+     * HTTP trả đối tác: 400 khi Forwarder từ chối request (xác thực, phân quyền, request sai, apiId không có);
+     * 200 trong mọi trường hợp còn lại (eBank đã xử lý: thành công hoặc lỗi nghiệp vụ; lỗi hệ thống). Kết quả chi tiết
+     * nằm trong body (status SUCCESS/FAILED, responseBody.code/errorCode). Mã HTTP thật chỉ ghi vào forwarder_log và log.
+     * partner null: chưa xác thực được đối tác, response không ký.
+     */
     private ResponseEntity<byte[]> respond(Partner partner, String requestId, String transactionKey, Outcome outcome) {
         byte[] body = jsonMapper.writeValueAsBytes(
                 new ResponseEnvelope(outcome.result(), transactionKey, requestId, outcome.responseBody()));
@@ -294,6 +313,6 @@ public class ForwardServiceImpl implements ForwardService {
             headers.set("X-Signature",
                     PartnerSignature.sign(partner.getSecretKey(), partner.getPartnerId(), timestamp, body));
         }
-        return ResponseEntity.status(outcome.status()).headers(headers).body(body);
+        return ResponseEntity.status(outcome.partnerStatus()).headers(headers).body(body);
     }
 }

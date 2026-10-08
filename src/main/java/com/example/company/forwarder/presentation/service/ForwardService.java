@@ -1,5 +1,6 @@
 package com.example.company.forwarder.presentation.service;
 
+import com.example.company.forwarder.common.error.ForwarderErrorCode;
 import org.springframework.http.ResponseEntity;
 import reactor.core.publisher.Mono;
 
@@ -15,6 +16,16 @@ public interface ForwardService {
     record InboundRequest(String partnerId, String timestamp, String signature, String requestId, byte[] body) {
     }
 
-    /** Body là ResponseEnvelope dạng JSON. Đối tác đã qua kiểm tra chữ ký thì response có X-Timestamp, X-Signature. */
+    /**
+     * Body là ResponseEnvelope dạng JSON. HTTP 400 khi Forwarder từ chối request (xác thực, phân quyền, request sai),
+     * 200 trong mọi trường hợp còn lại (kết quả nằm trong body).
+     * Đối tác đã qua kiểm tra chữ ký thì response có X-Timestamp, X-Signature.
+     */
     Mono<ResponseEntity<byte[]>> forward(InboundRequest request);
+
+    /**
+     * Response lỗi cho request không vào được tới forward() (ví dụ không đọc được body): status FAILED, responseBody
+     * là lỗi HYD-40 của mã này, HTTP theo {@link ForwarderErrorCode#partnerStatus()}. Không ký (chưa xác thực đối tác).
+     */
+    ResponseEntity<byte[]> reject(ForwarderErrorCode code, String requestId);
 }
